@@ -1,0 +1,5 @@
+.env
+tech_pulse.db
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
