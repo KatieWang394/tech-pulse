@@ -188,6 +188,7 @@ Respond with ONLY a JSON object:
         )
 
         result_text = response.content[0].text.strip()
+        result_text = result_text.replace("```json", "").replace("```", "").strip()
         result = json.loads(result_text)
 
         # 确保所有字段都存在

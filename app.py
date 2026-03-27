@@ -1,113 +1,77 @@
 """
-app.py — Tech Pulse 主页面 (Day 3 版本)
+app.py — Tech Pulse 主页 (Day 4 版本)
 
-更新内容：
-- 文章现在存进 SQLite 数据库了（不用每次重新抓+分析）
-- 加了 "已有数据" 和 "新抓取" 的区分
-- 显示新增/跳过的文章数量
+现在 app.py 变成了一个简洁的首页 / 导航页。
+具体功能拆分到了 pages/ 下的独立页面里：
+- pages/1_Trends.py  → 趋势看板
+- pages/2_Bookmarks.py → 个人知识库
+
+Streamlit 多页面的工作原理：
+- app.py 是首页（Home）
+- pages/ 文件夹里的每个 .py 文件自动变成侧边栏里的一个页面
+- 文件名前面的数字控制排序（1_ 排在 2_ 前面）
+- 下划线会变成空格显示（1_Trends → "Trends"）
 """
 
 import streamlit as st
-from services.hn_fetcher import fetch_top_stories
-from services.llm_service import categorize_stories
-from services.db import init_db, save_articles, get_recent_articles, get_category_counts
+from services.db import init_db, get_category_counts, get_bookmarks
 
 # ============================================================
-# 初始化
+# 页面配置
 # ============================================================
 st.set_page_config(page_title="Tech Pulse", page_icon="⚡", layout="wide")
-
-# 确保数据库表存在（安全地多次调用）
 init_db()
 
-CATEGORY_COLORS = {
-    "AI / Machine Learning": "🟣",
-    "Web Development": "🔵",
-    "Security / Privacy": "🔴",
-    "DevOps / Infrastructure": "🟠",
-    "Programming Languages": "🟢",
-    "Startups / Business": "🟡",
-    "Science / Research": "⚪",
-    "Career / Industry": "🟤",
-    "Other": "⚫",
-}
-
 # ============================================================
-# 标题
+# 首页内容
 # ============================================================
 st.title("⚡ Tech Pulse")
-st.markdown("Your personal tech intelligence dashboard — track what's trending, save what matters.")
+st.markdown("Your personal tech intelligence dashboard.")
 st.divider()
 
-# ============================================================
-# 控制面板
-# ============================================================
-col_btn, col_days, col_info = st.columns([2, 1, 2])
+# ---- 快速统计 ----
+col1, col2, col3 = st.columns(3)
 
-with col_btn:
-    fetch_clicked = st.button("🔄 Fetch & Analyze New Stories", type="primary")
+category_counts = get_category_counts(days=7)
+total_articles = sum(category_counts.values()) if category_counts else 0
+total_categories = len(category_counts) if category_counts else 0
+total_bookmarks = len(get_bookmarks())
 
-with col_days:
-    days_range = st.selectbox("Time range:", [1, 3, 7], index=2, format_func=lambda x: f"Last {x} day{'s' if x > 1 else ''}")
+col1.metric("📰 Articles Tracked", total_articles, help="From the last 7 days")
+col2.metric("📊 Categories", total_categories)
+col3.metric("🔖 Bookmarks Saved", total_bookmarks)
 
-# ---- 抓取新数据 ----
-if fetch_clicked:
-    with st.spinner("📡 Fetching stories from Hacker News..."):
-        stories = fetch_top_stories(30)
+st.divider()
 
-    with st.spinner("🧠 AI is categorizing... (~30-60 seconds)"):
-        stories = categorize_stories(stories)
+# ---- 导航卡片 ----
+nav_col1, nav_col2 = st.columns(2)
 
-    new_count, skip_count = save_articles(stories)
+with nav_col1:
+    st.subheader("📈 Trend Tracker")
+    st.markdown(
+        "See what topics are trending on Hacker News. "
+        "AI automatically categorizes and summarizes articles, "
+        "and tracks which topics are gaining momentum."
+    )
+    if total_articles > 0 and category_counts:
+        top_cat = max(category_counts, key=category_counts.get)
+        st.markdown(f"🔥 **Top category this week:** {top_cat} ({category_counts[top_cat]} articles)")
+    st.page_link("pages/1_Trends.py", label="Open Trend Tracker →", icon="📈")
 
-    with col_info:
-        if new_count > 0:
-            st.success(f"✅ {new_count} new articles saved, {skip_count} already in database")
-        else:
-            st.info(f"All {skip_count} articles were already in database. Try again later for new stories!")
+with nav_col2:
+    st.subheader("🔖 Knowledge Base")
+    st.markdown(
+        "Save any article by URL. AI generates summaries, tags, "
+        "and difficulty ratings. Build your personal library of "
+        "tech knowledge."
+    )
+    if total_bookmarks > 0:
+        st.markdown(f"📚 **You have {total_bookmarks} bookmark{'s' if total_bookmarks != 1 else ''} saved**")
+    st.page_link("pages/2_Bookmarks.py", label="Open Knowledge Base →", icon="🔖")
 
-# ============================================================
-# 从数据库读取并显示（不管有没有点抓取按钮）
-# ============================================================
-category_counts = get_category_counts(days=days_range)
+st.divider()
 
-if category_counts:
-    # ---- 统计面板 ----
-    st.subheader("📊 Category Breakdown")
-
-    sorted_cats = sorted(category_counts.items(), key=lambda x: x[1], reverse=True)
-    cols = st.columns(min(len(sorted_cats), 4))
-    for i, (cat, count) in enumerate(sorted_cats):
-        emoji = CATEGORY_COLORS.get(cat, "⚫")
-        cols[i % 4].metric(f"{emoji} {cat}", count)
-
-    st.divider()
-
-    # ---- 文章列表 ----
-    st.subheader("📰 Articles")
-
-    all_categories = ["All"] + [cat for cat, _ in sorted_cats]
-    selected_category = st.selectbox("Filter by category:", all_categories)
-
-    articles = get_recent_articles(days=days_range, category=selected_category)
-    st.caption(f"Showing {len(articles)} articles from the last {days_range} day{'s' if days_range > 1 else ''}")
-
-    for i, article in enumerate(articles, 1):
-        emoji = CATEGORY_COLORS.get(article["category"], "⚫")
-
-        with st.container():
-            col1, col2 = st.columns([5, 1])
-            with col1:
-                st.markdown(f"**{i}. [{article['title']}]({article['url']})**")
-                st.markdown(f"💡 _{article['summary'] or 'No summary'}_")
-                st.caption(
-                    f"{emoji} {article['category']} · "
-                    f"By {article['author']} · "
-                    f"Score: {article['score']}"
-                )
-            with col2:
-                st.metric(label="Score", value=article["score"])
-            st.divider()
-
-else:
-    st.info("👆 Click 'Fetch & Analyze' to get started! Articles will be saved to the database so you don't have to re-fetch every time.")
+# ---- 页脚 ----
+st.caption(
+    "Built with Python · Streamlit · SQLite · Claude API · Hacker News API"
+)
