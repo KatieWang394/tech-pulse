@@ -331,7 +331,17 @@ def delete_bookmark(bookmark_id):
     cursor.execute("DELETE FROM bookmarks WHERE id = ?", (bookmark_id,))
     conn.commit()
     conn.close()
-
+    
+def update_bookmark_notes(bookmark_id, notes):
+    """更新书签的用户笔记。"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE bookmarks SET user_notes = ? WHERE id = ?",
+        (notes, bookmark_id),
+    )
+    conn.commit()
+    conn.close()
 
 # ============================================================
 # 直接运行测试

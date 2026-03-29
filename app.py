@@ -1,20 +1,14 @@
 """
-app.py — Tech Pulse 主页 (Day 4 版本)
+app.py — Tech Pulse 首页 (Day 5 打磨版)
 
-现在 app.py 变成了一个简洁的首页 / 导航页。
-具体功能拆分到了 pages/ 下的独立页面里：
-- pages/1_Trends.py  → 趋势看板
-- pages/2_Bookmarks.py → 个人知识库
-
-Streamlit 多页面的工作原理：
-- app.py 是首页（Home）
-- pages/ 文件夹里的每个 .py 文件自动变成侧边栏里的一个页面
-- 文件名前面的数字控制排序（1_ 排在 2_ 前面）
-- 下划线会变成空格显示（1_Trends → "Trends"）
+改进：
+- 更清晰的数据统计
+- 最近保存的书签预览
+- 热门类别高亮
 """
 
 import streamlit as st
-from services.db import init_db, get_category_counts, get_bookmarks
+from services.db import init_db, get_category_counts, get_bookmarks, get_recent_articles
 
 # ============================================================
 # 页面配置
@@ -23,55 +17,61 @@ st.set_page_config(page_title="Tech Pulse", page_icon="⚡", layout="wide")
 init_db()
 
 # ============================================================
-# 首页内容
+# 首页
 # ============================================================
 st.title("⚡ Tech Pulse")
 st.markdown("Your personal tech intelligence dashboard.")
 st.divider()
 
-# ---- 快速统计 ----
-col1, col2, col3 = st.columns(3)
-
+# ---- 数据加载 ----
 category_counts = get_category_counts(days=7)
 total_articles = sum(category_counts.values()) if category_counts else 0
 total_categories = len(category_counts) if category_counts else 0
-total_bookmarks = len(get_bookmarks())
+bookmarks = get_bookmarks()
+total_bookmarks = len(bookmarks)
 
+# ---- 统计卡片 ----
+col1, col2, col3 = st.columns(3)
 col1.metric("📰 Articles Tracked", total_articles, help="From the last 7 days")
 col2.metric("📊 Categories", total_categories)
 col3.metric("🔖 Bookmarks Saved", total_bookmarks)
 
 st.divider()
 
-# ---- 导航卡片 ----
+# ---- 两栏导航 ----
 nav_col1, nav_col2 = st.columns(2)
 
 with nav_col1:
     st.subheader("📈 Trend Tracker")
-    st.markdown(
-        "See what topics are trending on Hacker News. "
-        "AI automatically categorizes and summarizes articles, "
-        "and tracks which topics are gaining momentum."
-    )
     if total_articles > 0 and category_counts:
         top_cat = max(category_counts, key=category_counts.get)
         st.markdown(f"🔥 **Top category this week:** {top_cat} ({category_counts[top_cat]} articles)")
+
+        # 显示前 3 个类别
+        sorted_cats = sorted(category_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+        for cat, count in sorted_cats:
+            pct = round(count / total_articles * 100)
+            st.progress(pct / 100, text=f"{cat}: {count} articles ({pct}%)")
+    else:
+        st.markdown("No data yet — click below to start tracking!")
+
     st.page_link("pages/1_Trends.py", label="Open Trend Tracker →", icon="📈")
 
 with nav_col2:
     st.subheader("🔖 Knowledge Base")
-    st.markdown(
-        "Save any article by URL. AI generates summaries, tags, "
-        "and difficulty ratings. Build your personal library of "
-        "tech knowledge."
-    )
     if total_bookmarks > 0:
-        st.markdown(f"📚 **You have {total_bookmarks} bookmark{'s' if total_bookmarks != 1 else ''} saved**")
+        st.markdown(f"📚 **{total_bookmarks} article{'s' if total_bookmarks != 1 else ''} saved**")
+
+        # 显示最近 3 个书签
+        st.markdown("**Recent saves:**")
+        for b in bookmarks[:3]:
+            st.markdown(f"- [{b['title'][:50]}{'...' if len(b['title']) > 50 else ''}]({b['url']})")
+    else:
+        st.markdown("Start building your personal library — save articles and get AI summaries!")
+
     st.page_link("pages/2_Bookmarks.py", label="Open Knowledge Base →", icon="🔖")
 
 st.divider()
 
 # ---- 页脚 ----
-st.caption(
-    "Built with Python · Streamlit · SQLite · Claude API · Hacker News API"
-)
+st.caption("Built with Python · Streamlit · SQLite · Claude API · Hacker News API")
