@@ -2,7 +2,7 @@
 
 A personal tech intelligence dashboard that tracks trending topics from Hacker News and helps you build a searchable, AI-summarized knowledge base.
 
-**[🔗 Live Demo](https://your-app-url.streamlit.app)** ← *replace with your actual URL after deployment*
+**[🔗 Live Demo](tech-pulse-hb7av7rossiqklrxbqbeun.streamlit.app)** ← *replace with your actual URL after deployment*
 
 ## Features
 
