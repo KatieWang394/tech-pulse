@@ -1,6 +1,6 @@
-streamlit==1.40.0
-requests==2.32.3
-beautifulsoup4==4.12.3
-anthropic==0.40.0
-python-dotenv==1.0.1
-pandas==2.2.3
+streamlit
+requests
+beautifulsoup4
+anthropic
+python-dotenv
+pandas
