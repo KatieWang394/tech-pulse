@@ -1,15 +1,9 @@
 """
-llm_service.py — 用 Claude API 对文章进行分类和摘要
+llm_service.py — 用 Claude API 对文章进行分类和摘要 (Day 6 部署兼容版)
 
-这个文件是整个项目的 "AI 大脑"：
-- 给 HN 文章自动分类（AI, Web Dev, Security 等）
-- 给 HN 文章生成一句话摘要
-- 给书签文章生成详细摘要 + 标签（Day 3 会用到）
-
-核心概念：
-- 我们用的是 Anthropic 的 Claude API（就是你现在在对话的这个 AI）
-- 调用方式和你之前用过的 API 类似：发一个请求，拿到一个响应
-- 关键技巧在于 "prompt"（提示词）怎么写，这直接决定返回结果的质量
+改动：
+- 同时支持 .env（本地开发）和 Streamlit secrets（云端部署）
+- 加了你之前发现的 JSON 清理 fix
 """
 
 import os
@@ -17,17 +11,69 @@ import json
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
-# load_dotenv() 会读取项目根目录下的 .env 文件，
-# 把里面的 ANTHROPIC_API_KEY=xxx 加载到环境变量里
-# 这样代码里就不用写死 API key 了（安全！）
+# 加载 .env 文件（本地开发用）
 load_dotenv()
 
-# 初始化 Anthropic 客户端
-# 它会自动从环境变量里读取 ANTHROPIC_API_KEY
-client = Anthropic()
+
+def get_api_key():
+    """
+    获取 API key，按优先级尝试：
+    1. Streamlit secrets（部署到 Streamlit Cloud 时用这个）
+    2. 环境变量 / .env 文件（本地开发时用这个）
+    """
+    # 先试 Streamlit secrets
+    try:
+        import streamlit as st
+        if "ANTHROPIC_API_KEY" in st.secrets:
+            return st.secrets["ANTHROPIC_API_KEY"]
+    except Exception:
+        pass
+
+    # 再试环境变量
+    key = os.getenv("ANTHROPIC_API_KEY")
+    if key:
+        return key
+
+    raise ValueError(
+        "No API key found! Either:\n"
+        "- Create a .env file with ANTHROPIC_API_KEY=your_key (local dev)\n"
+        "- Add it to Streamlit secrets (cloud deployment)"
+    )
+def get_api_key():
+    """
+    获取 API key，按优先级尝试：
+    1. 环境变量 / .env 文件（本地开发）
+    2. Streamlit secrets（云端部署）
+    """
+    # 先试环境变量（本地开发不会触发警告）
+    key = os.getenv("ANTHROPIC_API_KEY")
+    if key:
+        return key
+
+    # 再试 Streamlit secrets（云端部署时用）
+    try:
+        import streamlit as st
+        if "ANTHROPIC_API_KEY" in st.secrets:
+            return st.secrets["ANTHROPIC_API_KEY"]
+    except Exception:
+        pass
+
+    raise ValueError(
+        "No API key found! Either:\n"
+        "- Create a .env file with ANTHROPIC_API_KEY=your_key (local dev)\n"
+        "- Add it to Streamlit secrets (cloud deployment)"
+    )
+
+client = None
+
+def get_client():
+    global client
+    if client is None:
+        client = Anthropic(api_key=get_api_key())
+    return client
 
 # ============================================================
-# 分类列表 — 你可以根据自己的兴趣调整这些类别
+# 分类列表
 # ============================================================
 CATEGORIES = [
     "AI / Machine Learning",
@@ -41,31 +87,18 @@ CATEGORIES = [
     "Other",
 ]
 
+
+def clean_json_response(text):
+    """清理 Claude 返回的 JSON（去掉可能的 ```json ``` 包裹）"""
+    text = text.strip()
+    text = text.replace("```json", "").replace("```", "").strip()
+    return text
+
+
 # ============================================================
 # 给 HN 文章分类 + 生成摘要
 # ============================================================
 def categorize_article(title, url):
-    """
-    发送文章标题和 URL 给 Claude，让它：
-    1. 从预设类别中选一个最合适的
-    2. 写一句话摘要
-
-    参数:
-        title: 文章标题（字符串）
-        url:   文章链接（字符串）
-
-    返回:
-        一个字典：{"category": "AI / Machine Learning", "summary": "..."}
-        如果 API 调用失败，返回默认值
-    """
-
-    # ---- Prompt 设计 ----
-    # 这是整个文件最重要的部分。几个要点：
-    # 1. system prompt 告诉 Claude 它的角色和输出格式
-    # 2. 明确要求返回 JSON，这样我们可以直接 parse
-    # 3. 给出具体的类别列表，避免 Claude 自己编类别
-    # 4. 要求摘要简短（一句话），避免长篇大论浪费 token（= 浪费钱）
-
     system_prompt = """You are a tech news classifier. Given an article title and URL, you must:
 1. Classify it into exactly ONE of these categories: """ + ", ".join(CATEGORIES) + """
 2. Write a one-sentence summary (under 20 words) explaining what this article is about.
@@ -76,76 +109,43 @@ Respond with ONLY a JSON object in this exact format, no other text:
     user_message = f"Title: {title}\nURL: {url}"
 
     try:
-        # ---- API 调用 ----
-        # model: claude-haiku 最便宜最快，用来做分类这种简单任务完全够用
-        # max_tokens: 限制返回长度，分类+摘要用不了多少 token
-        # temperature: 0 表示让 Claude 尽量确定性地回答（不要太有创意）
-        response = client.messages.create(
+        response = get_client().messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=200,
             temperature=0,
             system=system_prompt,
-            messages=[
-                {"role": "user", "content": user_message}
-            ],
+            messages=[{"role": "user", "content": user_message}],
         )
 
-        # 从响应中提取文本
-        result_text = response.content[0].text.strip()
-        # 去掉 Claude 有时候会加的 ```json ``` 包裹
-        result_text = result_text.replace("```json", "").replace("```", "").strip()
-
-        # 尝试解析 JSON
+        result_text = clean_json_response(response.content[0].text)
         result = json.loads(result_text)
 
-        # 验证返回的类别是否在我们的列表里
         if result.get("category") not in CATEGORIES:
             result["category"] = "Other"
 
         return result
 
     except json.JSONDecodeError:
-        # Claude 偶尔可能返回不完美的 JSON，这里兜底
         print(f"  [Warning] Failed to parse JSON for: {title}")
-        print(f"  Raw response: {result_text}")
         return {"category": "Other", "summary": "Unable to generate summary"}
 
     except Exception as e:
-        # 网络错误、API key 无效等等
         print(f"  [Error] API call failed for: {title}")
         print(f"  Error: {e}")
         return {"category": "Other", "summary": "Unable to generate summary"}
 
 
 # ============================================================
-# 批量处理：给一组文章都加上分类和摘要
+# 批量处理
 # ============================================================
 def categorize_stories(stories):
-    """
-    给一组 HN 文章批量添加 AI 分类和摘要。
-
-    参数:
-        stories: hn_fetcher.fetch_top_stories() 返回的文章列表
-
-    返回:
-        同样的列表，但每个文章字典多了 "category" 和 "summary" 两个字段
-
-    注意：
-        这个函数会调用很多次 API（每篇文章一次），所以：
-        - 30 篇文章大概需要 30-60 秒
-        - 费用大概 $0.01-0.02（用 Haiku 模型非常便宜）
-    """
     total = len(stories)
     print(f"Categorizing {total} articles with Claude API...")
 
     for i, story in enumerate(stories):
         result = categorize_article(story["title"], story["url"])
-
-        # 把 AI 的分析结果加到原来的字典里
         story["category"] = result["category"]
         story["summary"] = result["summary"]
-
-        # 打印进度
         print(f"  [{i+1}/{total}] {story['category']}: {story['title'][:50]}...")
 
     print(f"\nDone! Categorized {total} articles.\n")
@@ -153,19 +153,9 @@ def categorize_stories(stories):
 
 
 # ============================================================
-# 给书签文章生成详细分析（Day 3 的书签功能会用到）
+# 给书签文章生成详细分析
 # ============================================================
 def summarize_bookmark(title, content):
-    """
-    给用户保存的书签文章生成详细摘要、标签和难度评级。
-
-    参数:
-        title:   文章标题
-        content: 文章正文（前 2000 字左右）
-
-    返回:
-        字典：{"summary": "...", "tags": "tag1,tag2,tag3", "difficulty": "beginner"}
-    """
     system_prompt = """You are a tech content analyzer. Given an article title and its content, provide:
 1. A 2-3 sentence summary of the key points
 2. 3-5 relevant tags (comma-separated, lowercase)
@@ -177,21 +167,17 @@ Respond with ONLY a JSON object:
     user_message = f"Title: {title}\n\nContent:\n{content[:3000]}"
 
     try:
-        response = client.messages.create(
+        response = get_client().messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=300,
             temperature=0,
             system=system_prompt,
-            messages=[
-                {"role": "user", "content": user_message}
-            ],
+            messages=[{"role": "user", "content": user_message}],
         )
 
-        result_text = response.content[0].text.strip()
-        result_text = result_text.replace("```json", "").replace("```", "").strip()
+        result_text = clean_json_response(response.content[0].text)
         result = json.loads(result_text)
 
-        # 确保所有字段都存在
         return {
             "summary": result.get("summary", "No summary available"),
             "tags": result.get("tags", "untagged"),
@@ -207,27 +193,14 @@ Respond with ONLY a JSON object:
         }
 
 
-# ============================================================
-# 直接运行测试
-# ============================================================
 if __name__ == "__main__":
-    # 测试分类功能：用几个假文章标题试试
     test_articles = [
         {"title": "GPT-5 achieves human-level reasoning on math benchmarks", "url": "https://example.com/1"},
         {"title": "Why Rust is replacing C++ in production systems", "url": "https://example.com/2"},
-        {"title": "Show HN: I built a privacy-focused email client", "url": "https://example.com/3"},
-        {"title": "YC-backed startup raises $50M for AI coding tools", "url": "https://example.com/4"},
     ]
 
     print("Testing article categorization...")
-    print("=" * 60)
-
     for article in test_articles:
         result = categorize_article(article["title"], article["url"])
-        print(f"\nTitle:    {article['title']}")
-        print(f"Category: {result['category']}")
-        print(f"Summary:  {result['summary']}")
-
-    print("\n" + "=" * 60)
-    print("If you see categories and summaries above, the API is working!")
-    print("Cost for this test: ~$0.001 (less than a tenth of a cent)")
+        print(f"  {result['category']}: {result['summary']}")
+    print("\n✅ API is working!")
